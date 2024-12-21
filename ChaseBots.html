@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Moving Characters Grid</title>
+    <style>
+        body {
+            background-color: black;
+            color: #333;
+            font-family: 'Courier New', monospace;
+            margin: 20px;
+            letter-spacing: 1em;
+            line-height: 1.6em;
+            font-size: 17.3px;
+            font-weight: bold;
+            text-align: center;
+        }
+        #grid {
+            white-space: pre;
+            display: inline-block;
+            text-align: left;
+            margin: 0 auto;
+        }
+        .x {
+            color: red;
+            font-weight: bold;
+        }
+        .o {
+            color: lime;
+            font-weight: bold;
+        }
+        .barrier {
+            color: #fff;
+            font-weight: bold;
+        }
+        .coin {
+            color: yellow;
+            font-weight: bold;
+        }
+        .game-over {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: red;
+            font-size: 32px;
+            z-index: 1000;
+            text-shadow: 2px 2px 4px black;
+            font-family: Arial, Helvetica, sans-serif;
+            background-color: rgba(128, 128, 128, 0.9);
+            padding: 15px 25px;
+            border-radius: 8px;
+            text-align: center;
+            letter-spacing: normal;
+            line-height: 1.2;
+        }
+    </style>
+</head>
+<body>
+<div id="grid"></div>
+<div id="gameOverText"></div>
+
+<script>
+    const gridSize = 25;
+    let grid = [];
+    let score = 0;
+    let coins = [];  // Store coin positions
+    let isXEscaping = false;  // Moved to top
+    let escapeTimeout = null; // Moved to top
+    let gameActive = true;
+    
+    // Store positions for all characters
+    let characters = {
+        x: { symbol: 'X', pos: { x: 0, y: 0 }, class: 'x', interval: null },
+        o1: { symbol: 'O', pos: { x: 24, y: 24 }, class: 'o', interval: null },
+        o2: { symbol: 'O', pos: { x: 0, y: 24 }, class: 'o', interval: null },
+        o3: { symbol: 'O', pos: { x: 24, y: 0 }, class: 'o', interval: null }
+    };
+
+    // Get random speed between 125ms and 400ms for X, and 262ms to 525ms for O's (25% faster)
+    function getRandomSpeed(isX) {
+        if (isX) {
+            return Math.floor(Math.random() * (400 - 125 + 1)) + 125;  // X: 125ms to 400ms (unchanged)
+        } else {
+            return Math.floor(Math.random() * (525 - 262 + 1)) + 262;  // O's: 262ms to 525ms (25% faster from 350-700)
+        }
+    }
+
+    // Check if position is occupied by a character
+    function isCharacterPosition(x, y) {
+        for (let char in characters) {
+            if (characters[char].pos.x === x && characters[char].pos.y === y) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Generate random barriers
+    function generateBarriers() {
+        const numBarriers = Math.floor(Math.random() * (75 - 25 + 1)) + 25;
+        let barriersPlaced = 0;
+
+        while (barriersPlaced < numBarriers) {
+            const x = Math.floor(Math.random() * gridSize);
+            const y = Math.floor(Math.random() * gridSize);
+
+            // Only place barrier if position is empty and not a character position
+            if (grid[y][x] === '·' && !isCharacterPosition(x, y)) {
+                grid[y][x] = '#';
+                barriersPlaced++;
+            }
+        }
+    }
+
+    // Generate coins near center
+    function generateCoins(numCoins = 3) {
+        const centerArea = {
+            minX: Math.floor(gridSize * 0.3),
+            maxX: Math.floor(gridSize * 0.7),
+            minY: Math.floor(gridSize * 0.3),
+            maxY: Math.floor(gridSize * 0.7)
+        };
+
+        coins = []; // Clear existing coins
+        let attempts = 0;
+        const maxAttempts = 100; // Prevent infinite loop
+
+        while (coins.length < numCoins && attempts < maxAttempts) {
+            const x = Math.floor(Math.random() * (centerArea.maxX - centerArea.minX + 1)) + centerArea.minX;
+            const y = Math.floor(Math.random() * (centerArea.maxY - centerArea.minY + 1)) + centerArea.minY;
+            
+            // Check if position is valid and not already used
+            if (grid[y][x] === '·' && !isCharacterPosition(x, y) && 
+                !coins.some(coin => coin.x === x && coin.y === y)) {
+                grid[y][x] = '$';
+                coins.push({x, y});
+            }
+            attempts++;
+        }
+
+        // If we couldn't place all coins, try with a wider area
+        if (coins.length < numCoins) {
+            const widerArea = {
+                minX: Math.floor(gridSize * 0.2),
+                maxX: Math.floor(gridSize * 0.8),
+                minY: Math.floor(gridSize * 0.2),
+                maxY: Math.floor(gridSize * 0.8)
+            };
+
+            while (coins.length < numCoins) {
+                const x = Math.floor(Math.random() * (widerArea.maxX - widerArea.minX + 1)) + widerArea.minX;
+                const y = Math.floor(Math.random() * (widerArea.maxY - widerArea.minY + 1)) + widerArea.minY;
+                
+                if (grid[y][x] === '·' && !isCharacterPosition(x, y) && 
+                    !coins.some(coin => coin.x === x && coin.y === y)) {
+                    grid[y][x] = '$';
+                    coins.push({x, y});
+                }
+            }
+        }
+    }
+
+    // Find closest coin to X
+    function findClosestCoin(pos) {
+        if (coins.length === 0) return null;
+        
+        let closest = coins[0];
+        let minDistance = Number.MAX_VALUE;
+        
+        for (let coin of coins) {
+            const distance = Math.abs(coin.x - pos.x) + Math.abs(coin.y - pos.y);
+            if (distance < minDistance) {
+                minDistance = distance;
+                closest = coin;
+            }
+        }
+        return closest;
+    }
+
+    // Add function to check if position is occupied by an O
+    function isOccupiedByO(x, y, currentO) {
+        for (let key in characters) {
+            if (key.startsWith('o') && key !== currentO) {
+                const oPos = characters[key].pos;
+                if (oPos.x === x && oPos.y === y) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Modify moveTowards function to check for O collisions
+    function moveTowards(current, target, isO = false, charKey = '') {
+        let bestMoves = [];
+        let currentDistance = Math.abs(target.x - current.x) + Math.abs(target.y - current.y);
+
+        // Check each possible move
+        if (current.y > 0 && grid[current.y - 1][current.x] !== '#' && 
+            (!isO || grid[current.y - 1][current.x] !== '$') && 
+            (!isO || !isOccupiedByO(current.x, current.y - 1, charKey))) {
+            let distance = Math.abs(target.x - current.x) + Math.abs(target.y - (current.y - 1));
+            if (distance < currentDistance) bestMoves.push({y: current.y - 1, x: current.x});
+        }
+        if (current.y < gridSize - 1 && grid[current.y + 1][current.x] !== '#' && 
+            (!isO || grid[current.y + 1][current.x] !== '$') && 
+            (!isO || !isOccupiedByO(current.x, current.y + 1, charKey))) {
+            let distance = Math.abs(target.x - current.x) + Math.abs(target.y - (current.y + 1));
+            if (distance < currentDistance) bestMoves.push({y: current.y + 1, x: current.x});
+        }
+        if (current.x > 0 && grid[current.y][current.x - 1] !== '#' && 
+            (!isO || grid[current.y][current.x - 1] !== '$') && 
+            (!isO || !isOccupiedByO(current.x - 1, current.y, charKey))) {
+            let distance = Math.abs(target.x - (current.x - 1)) + Math.abs(target.y - current.y);
+            if (distance < currentDistance) bestMoves.push({y: current.y, x: current.x - 1});
+        }
+        if (current.x < gridSize - 1 && grid[current.y][current.x + 1] !== '#' && 
+            (!isO || grid[current.y][current.x + 1] !== '$') && 
+            (!isO || !isOccupiedByO(current.x + 1, current.y, charKey))) {
+            let distance = Math.abs(target.x - (current.x + 1)) + Math.abs(target.y - current.y);
+            if (distance < currentDistance) bestMoves.push({y: current.y, x: current.x + 1});
+        }
+
+        return bestMoves.length > 0 ? 
+            bestMoves[Math.floor(Math.random() * bestMoves.length)] : null;
+    }
+
+    // Modify getRandomMove function to check for O collisions
+    function getRandomMove(pos, isO = false, charKey = '') {
+        let possibleMoves = [];
+        if (pos.y > 0 && grid[pos.y - 1][pos.x] !== '#' && 
+            (!isO || grid[pos.y - 1][pos.x] !== '$') && 
+            (!isO || !isOccupiedByO(pos.x, pos.y - 1, charKey))) 
+            possibleMoves.push({y: pos.y - 1, x: pos.x});
+        if (pos.y < gridSize - 1 && grid[pos.y + 1][pos.x] !== '#' && 
+            (!isO || grid[pos.y + 1][pos.x] !== '$') && 
+            (!isO || !isOccupiedByO(pos.x, pos.y + 1, charKey))) 
+            possibleMoves.push({y: pos.y + 1, x: pos.x});
+        if (pos.x > 0 && grid[pos.y][pos.x - 1] !== '#' && 
+            (!isO || grid[pos.y][pos.x - 1] !== '$') && 
+            (!isO || !isOccupiedByO(pos.x - 1, pos.y, charKey))) 
+            possibleMoves.push({y: pos.y, x: pos.x - 1});
+        if (pos.x < gridSize - 1 && grid[pos.y][pos.x + 1] !== '#' && 
+            (!isO || grid[pos.y][pos.x + 1] !== '$') && 
+            (!isO || !isOccupiedByO(pos.x + 1, pos.y, charKey))) 
+            possibleMoves.push({y: pos.y, x: pos.x + 1});
+
+        return possibleMoves.length > 0 ? 
+            possibleMoves[Math.floor(Math.random() * possibleMoves.length)] : null;
+    }
+
+    // Modified display grid to include coins
+    function displayGrid() {
+        let display = '';
+        for (let i = 0; i < gridSize; i++) {
+            for (let j = 0; j < gridSize; j++) {
+                if (grid[i][j] === 'X') {
+                    display += '<span class="x">X</span>';
+                } else if (grid[i][j] === 'O') {
+                    display += '<span class="o">O</span>';
+                } else if (grid[i][j] === '#') {
+                    display += '<span class="barrier">#</span>';
+                } else if (grid[i][j] === '$') {
+                    display += '<span class="coin">$</span>';
+                } else {
+                    display += grid[i][j];
+                }
+            }
+            display += '\n';
+        }
+        document.getElementById('grid').innerHTML = display;
+    }
+
+    // Modified initialization
+    function initializeGrid() {
+        for (let i = 0; i < gridSize; i++) {
+            grid[i] = [];
+            for (let j = 0; j < gridSize; j++) {
+                grid[i][j] = '·';
+            }
+        }
+        generateBarriers();
+        generateCoins(3);  // Generate 3 initial coins
+        for (let char in characters) {
+            let pos = characters[char].pos;
+            grid[pos.y][pos.x] = characters[char].symbol;
+        }
+    }
+
+    // Get distance between two points
+    function getDistance(pos1, pos2) {
+        return Math.abs(pos1.x - pos2.x) + Math.abs(pos1.y - pos2.y);
+    }
+
+    // Check if any O is nearby
+    function isONearby() {
+        const xPos = characters.x.pos;
+        for (let key in characters) {
+            if (key.startsWith('o')) {
+                const distance = getDistance(xPos, characters[key].pos);
+                if (distance <= 4) return true;
+            }
+        }
+        return false;
+    }
+
+    // Find direction away from nearest O
+    function moveAwayFromOs(pos) {
+        let avgX = 0, avgY = 0, count = 0;
+        
+        // Calculate average position of nearby O's
+        for (let key in characters) {
+            if (key.startsWith('o')) {
+                const oPos = characters[key].pos;
+                const distance = getDistance(pos, oPos);
+                if (distance <= 6) {
+                    avgX += oPos.x;
+                    avgY += oPos.y;
+                    count++;
+                }
+            }
+        }
+
+        if (count === 0) return null;
+
+        avgX /= count;
+        avgY /= count;
+
+        let bestMoves = [];
+        let currentDistance = getDistance({x: avgX, y: avgY}, pos);
+
+        if (pos.y > 0 && grid[pos.y - 1][pos.x] !== '#') {
+            let distance = getDistance({x: avgX, y: avgY}, {x: pos.x, y: pos.y - 1});
+            if (distance > currentDistance) bestMoves.push({y: pos.y - 1, x: pos.x});
+        }
+        if (pos.y < gridSize - 1 && grid[pos.y + 1][pos.x] !== '#') {
+            let distance = getDistance({x: avgX, y: avgY}, {x: pos.x, y: pos.y + 1});
+            if (distance > currentDistance) bestMoves.push({y: pos.y + 1, x: pos.x});
+        }
+        if (pos.x > 0 && grid[pos.y][pos.x - 1] !== '#') {
+            let distance = getDistance({x: avgX, y: avgY}, {x: pos.x - 1, y: pos.y});
+            if (distance > currentDistance) bestMoves.push({y: pos.y, x: pos.x - 1});
+        }
+        if (pos.x < gridSize - 1 && grid[pos.y][pos.x + 1] !== '#') {
+            let distance = getDistance({x: avgX, y: avgY}, {x: pos.x + 1, y: pos.y});
+            if (distance > currentDistance) bestMoves.push({y: pos.y, x: pos.x + 1});
+        }
+
+        return bestMoves.length > 0 ? 
+            bestMoves[Math.floor(Math.random() * bestMoves.length)] : null;
+    }
+
+    // Add new function for game reset
+    function resetGame() {
+        // Clear all intervals
+        for (let char in characters) {
+            if (characters[char].interval) {
+                clearInterval(characters[char].interval);
+                characters[char].interval = null;
+            }
+        }
+        if (escapeTimeout) {
+            clearTimeout(escapeTimeout);
+            escapeTimeout = null;
+        }
+
+        // Reset variables
+        gameActive = true;
+        isXEscaping = false;
+        score = 0;
+        coins = [];
+        document.getElementById('gameOverText').innerHTML = '';
+
+        // Reset character positions
+        characters.x.pos = { x: 0, y: 0 };
+        characters.o1.pos = { x: 24, y: 24 };
+        characters.o2.pos = { x: 0, y: 24 };
+        characters.o3.pos = { x: 24, y: 0 };
+
+        // Reinitialize grid
+        initializeGrid();
+        displayGrid();
+
+        // Restart movement
+        for (let char in characters) {
+            startCharacterMovement(char);
+        }
+    }
+
+    // Modify the checkCollision function to include win condition
+    function checkCollision() {
+        const xPos = characters.x.pos;
+        
+        // Check for win condition (all coins collected)
+        if (coins.length === 0 && score >= 3) {
+            console.log('Win Condition! Score:', score);
+            gameActive = false;
+            document.getElementById('gameOverText').innerHTML = 
+                `<div class="game-over" style="color: lime;">WIN CONDITION<br>Score: ${score}<br>Restarting in 5 seconds...</div>`;
+            setTimeout(resetGame, 5000);
+            return true;
+        }
+
+        // Check for collision with O's
+        for (let key in characters) {
+            if (key.startsWith('o')) {
+                const oPos = characters[key].pos;
+                if (xPos.x === oPos.x && xPos.y === oPos.y) {
+                    console.log('Lose Condition! Score:', score);
+                    gameActive = false;
+                    document.getElementById('gameOverText').innerHTML = 
+                        `<div class="game-over">LOSE CONDITION<br>Score: ${score}<br>Restarting in 5 seconds...</div>`;
+                    setTimeout(resetGame, 5000);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Modify moveCharacter function to pass charKey
+    function moveCharacter(charKey) {
+        if (!gameActive) return;
+
+        let char = characters[charKey];
+        let pos = char.pos;
+        
+        grid[pos.y][pos.x] = '·';
+
+        let move;
+        if (charKey === 'x') {
+            if (isONearby()) {
+                if (!isXEscaping) {
+                    isXEscaping = true;
+                    if (escapeTimeout) clearTimeout(escapeTimeout);
+                    escapeTimeout = setTimeout(() => {
+                        isXEscaping = false;
+                    }, 4000);
+                }
+                move = moveAwayFromOs(pos);
+            } else {
+                const target = findClosestCoin(pos);
+                if (target) {
+                    move = moveTowards(pos, target, false, charKey);
+                }
+            }
+            if (!move) move = getRandomMove(pos, false, charKey);
+        } else if (charKey.startsWith('o')) {
+            move = moveTowards(pos, characters.x.pos, true, charKey);
+            if (!move) move = getRandomMove(pos, true, charKey);
+        }
+
+        if (!move) {
+            grid[pos.y][pos.x] = char.symbol;
+            return;
+        }
+
+        if (charKey === 'x' && grid[move.y][move.x] === '$') {
+            score++;
+            console.log('Score:', score);
+            coins = coins.filter(coin => coin.x !== move.x || coin.y !== move.y);
+        }
+
+        char.pos.x = move.x;
+        char.pos.y = move.y;
+        grid[move.y][move.x] = char.symbol;
+        displayGrid();
+
+        if (checkCollision()) {
+            return;
+        }
+    }
+
+    // Modified startCharacterMovement
+    function startCharacterMovement(charKey) {
+        if (characters[charKey].interval) {
+            clearInterval(characters[charKey].interval);
+        }
+        
+        let speed;
+        if (charKey === 'x') {
+            speed = isXEscaping ? 100 : getRandomSpeed(true);  // X speeds: 100ms when escaping (even faster), 125-400ms normally
+        } else {
+            speed = getRandomSpeed(false);  // O speeds: 350-700ms
+        }
+
+        characters[charKey].interval = setInterval(() => {
+            moveCharacter(charKey);
+            clearInterval(characters[charKey].interval);
+            startCharacterMovement(charKey);
+        }, speed);
+    }
+
+    // Initialize and start
+    initializeGrid();
+    displayGrid();
+
+    // Start independent movement for each character
+    for (let char in characters) {
+        startCharacterMovement(char);
+    }
+</script>
+</body>
+</html>
